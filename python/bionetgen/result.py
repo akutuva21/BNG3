@@ -45,13 +45,15 @@ class SimResult:
             data[name] = values
         return pd.DataFrame(data)
 
-    def plot(self, observables=None, **kwargs):
+    def plot(self, observables=None, show=True, **kwargs):
         """Plot observable time courses.
 
         Parameters
         ----------
         observables : list of str, optional
             Subset of observables to plot. If None, plot all.
+        show : bool, optional
+            Whether to call plt.show() after creating the plot. Default is True.
         **kwargs
             Passed to matplotlib's plot function.
         """
@@ -67,6 +69,10 @@ class SimResult:
         ax.set_xlabel("Time")
         ax.set_ylabel("Count / Concentration")
         ax.legend()
+
+        if show:
+            plt.show()
+
         return fig, ax
 
     def __repr__(self) -> str:
