@@ -1,6 +1,12 @@
-import cement
 import bionetgen as bng
-from cement.core.exc import CaughtSignal
+
+try:
+    import cement
+    from cement.core.exc import CaughtSignal
+except ImportError:
+    cement = None
+    CaughtSignal = Exception
+
 from .core.exc import BNGError
 from .core.exc import BNGVersionError
 from .core.main import runCLI
@@ -14,7 +20,7 @@ from .core.utils.utils import test_perl
 
 # pull defaults defined in core/defaults
 CONF = bng.defaults
-VERSION_BANNER = bng.defaults.banner
+VERSION_BANNER = bng.defaults.banner if bng.defaults else ""
 
 
 # require version argparse action

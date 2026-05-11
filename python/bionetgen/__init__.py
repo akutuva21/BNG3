@@ -21,6 +21,13 @@ else:
 
 from bionetgen.result import SimResult
 
+try:
+    from bionetgen.core.defaults import BNGDefaults
+
+    defaults = BNGDefaults()
+except Exception:
+    defaults = None
+
 __version__ = "3.0.0a1"
 
 __all__ = [
