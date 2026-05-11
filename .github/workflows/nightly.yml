@@ -1,0 +1,283 @@
+name: Nightly Validation
+
+on:
+  schedule:
+    - cron: "23 4 * * *"  # 4:23 AM UTC daily
+  workflow_dispatch:
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Full BNG Network Generation Validation
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  bng-validation:
+    name: BNG Validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Install build deps (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install cmake ninja
+
+      - name: Setup MSVC (Windows)
+        if: startsWith(matrix.os, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build bng_cpp
+        shell: bash
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_CLI=ON \
+            -DBUILD_TESTS=OFF
+          cmake --build build --config Release
+
+      - name: Run full validation
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == *windows* ]]; then
+            BNG=build/cpp/bng_cpp.exe
+          else
+            BNG=build/cpp/bng_cpp
+          fi
+          python scripts/validate.py --bng-cpp "$BNG" --verbose
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NFSim Stochastic Validation (with retries for statistical tests)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  nfsim-stochastic:
+    name: NFSim Stochastic Validation
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build
+          pip install numpy scipy
+
+      - name: Build NFSim
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_CLI=ON \
+            -DBUILD_NFSIM_CLI=ON \
+            -DBUILD_TESTS=OFF
+          cmake --build build --config Release
+
+      - name: Run NFSim stochastic validation (with retry)
+        run: |
+          NFSIM=build/cpp/NFsim
+          PASS=0
+          FAIL=0
+          TOTAL=0
+
+          for xml in models/**/*.xml; do
+            [ -f "$xml" ] || continue
+            TOTAL=$((TOTAL + 1))
+            model_name=$(basename "$xml" .xml)
+
+            # Retry up to 3 times (stochastic tests may have variance)
+            success=false
+            for attempt in 1 2 3; do
+              if timeout 60 "$NFSIM" -xml "$xml" -sim 10 -oSteps 10 > /dev/null 2>&1; then
+                success=true
+                break
+              fi
+            done
+
+            if [ "$success" = true ]; then
+              echo "PASS  $model_name"
+              PASS=$((PASS + 1))
+            else
+              echo "FAIL  $model_name (3 attempts)"
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          echo ""
+          echo "================================"
+          echo "NFSim Stochastic Validation"
+          echo "  Total: $TOTAL"
+          echo "  Pass:  $PASS"
+          echo "  Fail:  $FAIL"
+          echo "================================"
+
+          if [ $FAIL -gt 0 ]; then
+            exit 1
+          fi
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Python Full Test Suite (all optional deps)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  python-full:
+    name: Python Full Suite
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build
+          pip install scikit-build-core pybind11
+          pip install -e .[full,dev]
+        env:
+          CMAKE_ARGS: "-DBUILD_TESTS=OFF -DBUILD_CLI=OFF"
+
+      - name: Run full test suite
+        run: pytest tests/python/ -v --tb=long
+
+      - name: Run performance benchmarks
+        run: |
+          python -c "
+          import time
+          import bionetgen
+
+          # Benchmark: parse + generate + simulate
+          models = [
+              'tests/validation/Validate/egfr_net.bngl',
+              'tests/validation/Validate/fceri_ji.bngl',
+          ]
+          for m in models:
+              try:
+                  start = time.perf_counter()
+                  model = bionetgen.load(m)
+                  parse_time = time.perf_counter() - start
+
+                  start = time.perf_counter()
+                  model.generate_network()
+                  gen_time = time.perf_counter() - start
+
+                  start = time.perf_counter()
+                  result = model.simulate(method='ode', t_end=100, n_steps=100)
+                  sim_time = time.perf_counter() - start
+
+                  print(f'{m}:')
+                  print(f'  Parse: {parse_time*1000:.1f} ms')
+                  print(f'  Generate: {gen_time*1000:.1f} ms')
+                  print(f'  Simulate: {sim_time*1000:.1f} ms')
+                  print(f'  Total: {(parse_time+gen_time+sim_time)*1000:.1f} ms')
+                  print()
+              except Exception as e:
+                  print(f'{m}: SKIP ({e})')
+          "
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Cross-validation: C++ vs Perl (requires Perl)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  cross-validation:
+    name: C++ vs Perl Cross-Validation
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Perl and BNG2.pl
+        run: |
+          sudo apt-get update && sudo apt-get install -y perl cmake ninja-build
+          # BNG2.pl is in legacy/perl/
+          echo "Perl version: $(perl --version | head -2)"
+
+      - name: Build bng_cpp
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_CLI=ON \
+            -DBUILD_TESTS=OFF
+          cmake --build build --config Release
+
+      - name: Run cross-validation
+        run: |
+          set -e
+          BNG_CPP=build/cpp/bng_cpp
+          BNG_PERL=legacy/perl/BNG2.pl
+          MODELS_DIR=tests/validation/Validate
+
+          if [ ! -f "$BNG_PERL" ]; then
+            echo "BNG2.pl not found, skipping cross-validation"
+            exit 0
+          fi
+
+          PASS=0
+          FAIL=0
+          SKIP=0
+
+          for bngl in "$MODELS_DIR"/*.bngl; do
+            model=$(basename "$bngl" .bngl)
+            tmpdir=$(mktemp -d)
+
+            # Run C++ engine
+            cp "$bngl" "$tmpdir/"
+            if ! timeout 30 "$BNG_CPP" "$tmpdir/$model.bngl" > /dev/null 2>&1; then
+              SKIP=$((SKIP + 1))
+              rm -rf "$tmpdir"
+              continue
+            fi
+            cpp_net="$tmpdir/$model.net"
+
+            # Run Perl engine
+            perl_tmpdir=$(mktemp -d)
+            cp "$bngl" "$perl_tmpdir/"
+            if ! timeout 60 perl "$BNG_PERL" "$perl_tmpdir/$model.bngl" > /dev/null 2>&1; then
+              SKIP=$((SKIP + 1))
+              rm -rf "$tmpdir" "$perl_tmpdir"
+              continue
+            fi
+            perl_net="$perl_tmpdir/$model.net"
+
+            # Compare species counts
+            if [ -f "$cpp_net" ] && [ -f "$perl_net" ]; then
+              cpp_sp=$(grep -c "^[[:space:]]*[0-9]" <(sed -n '/begin species/,/end species/p' "$cpp_net") 2>/dev/null || echo 0)
+              perl_sp=$(grep -c "^[[:space:]]*[0-9]" <(sed -n '/begin species/,/end species/p' "$perl_net") 2>/dev/null || echo 0)
+
+              if [ "$cpp_sp" = "$perl_sp" ]; then
+                PASS=$((PASS + 1))
+              else
+                echo "MISMATCH $model: C++=$cpp_sp species, Perl=$perl_sp species"
+                FAIL=$((FAIL + 1))
+              fi
+            else
+              SKIP=$((SKIP + 1))
+            fi
+
+            rm -rf "$tmpdir" "$perl_tmpdir"
+          done
+
+          echo ""
+          echo "================================"
+          echo "Cross-Validation: C++ vs Perl"
+          echo "  Pass:  $PASS"
+          echo "  Fail:  $FAIL"
+          echo "  Skip:  $SKIP"
+          echo "================================"

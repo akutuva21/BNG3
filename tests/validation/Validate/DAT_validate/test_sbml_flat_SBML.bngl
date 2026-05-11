@@ -1,0 +1,55 @@
+###
+#@notes:'This is a plain translation of an SBML model created on 09/08/2016. The original model has 5 molecules and 6 reactions. The translated model has 5 molecules and 6 rules'
+###
+begin model
+begin parameters
+	k1_f 1.0
+	k1_r 0.1
+	k2_f 1.0
+	k2_r 0.1
+	k3_f 1.0
+	k3_r 0.1
+end parameters
+begin compartments
+	#volume units: L
+	cell  3  1.0
+end compartments
+begin molecule types
+	B____()
+	C____()
+	A____()
+	D____()
+	AA____()
+end molecule types
+begin seed species
+	@cell:A____() 1.0 #A____ #S1
+	@cell:B____() 2.0 #B____ #S2
+	@cell:C____() 3.0 #C____ #S3
+	@cell:D____() 4.0 #D____ #S4
+	@cell:AA____() 5.0 #AA____ #S5
+end seed species
+begin observables
+	Species A_____cell @cell:A____() #A()
+	Species B_____cell @cell:B____() #B()
+	Species C_____cell @cell:C____() #C()
+	Species D_____cell @cell:D____() #D()
+	Species AA_____cell @cell:AA____() #AA()
+end observables
+begin functions
+	functionRate4() = 0.5 * k3_f * 2
+	A() = 0 + A_____cell
+	AA() = 0 + AA_____cell
+	C() = 0 + C_____cell
+	B() = 0 + B_____cell
+	D() = 0 + D_____cell
+	dim_r() = k3_r
+end functions
+begin reaction rules
+	R1: A____()@cell + B____()@cell -> C____()@cell k1_f
+	R2: C____()@cell -> A____()@cell + B____()@cell k1_r
+	R3: B____()@cell + C____()@cell -> D____()@cell k2_f
+	R4: D____()@cell -> B____()@cell + C____()@cell k2_r
+	R5: A____()@cell + A____()@cell -> AA____()@cell functionRate4()
+	R6: AA____()@cell -> A____()@cell + A____()@cell dim_r ()
+end reaction rules
+end model

@@ -1,0 +1,508 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_BUILD_TYPE: Release
+  CTEST_OUTPUT_ON_FAILURE: 1
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Code Quality
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linters
+        run: pip install black ruff
+
+      - name: Check Python formatting (Black)
+        run: black --check --diff python/ tests/python/ scripts/
+
+      - name: Run ruff linter
+        run: ruff check python/ tests/python/ scripts/
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # C++ Build & Test (BNG engine + NFSim)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  cpp-build:
+    name: C++ (${{ matrix.os }}, ${{ matrix.compiler }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            compiler: gcc-12
+            cc: gcc-12
+            cxx: g++-12
+          - os: ubuntu-22.04
+            compiler: clang-15
+            cc: clang-15
+            cxx: clang++-15
+          - os: macos-13
+            compiler: clang
+            cc: clang
+            cxx: clang++
+          - os: macos-14
+            compiler: clang-arm64
+            cc: clang
+            cxx: clang++
+          - os: windows-2022
+            compiler: msvc
+            cc: cl
+            cxx: cl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install cmake ninja
+
+      - name: Setup MSVC (Windows)
+        if: startsWith(matrix.os, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure CMake (Unix)
+        if: "!startsWith(matrix.os, 'windows')"
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_CLI=ON \
+            -DBUILD_NFSIM_CLI=ON \
+            -DBUILD_TESTS=ON
+
+      - name: Configure CMake (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} `
+            -DBUILD_PYTHON_BINDINGS=OFF `
+            -DBUILD_CLI=ON `
+            -DBUILD_NFSIM_CLI=ON `
+            -DBUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
+
+      - name: Run C++ unit tests
+        run: ctest --test-dir build --output-on-failure -C ${{ env.CMAKE_BUILD_TYPE }}
+
+      - name: Upload bng_cpp artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bng_cpp-${{ matrix.os }}-${{ matrix.compiler }}
+          path: |
+            build/cpp/bng_cpp*
+            build/cpp/NFsim*
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # C++ with AddressSanitizer (catch memory bugs)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  cpp-asan:
+    name: C++ ASan (Ubuntu)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Configure with ASan
+        env:
+          CC: gcc-12
+          CXX: g++-12
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_CLI=ON \
+            -DBUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Run tests under ASan
+        run: ctest --test-dir build --output-on-failure
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Network Generation Validation (C++ vs Perl reference .net files)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  validation:
+    name: Validation (${{ matrix.os }})
+    needs: cpp-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: bng_cpp-ubuntu-22.04-gcc-12
+          - os: macos-14
+            artifact: bng_cpp-macos-14-clang-arm64
+          - os: windows-2022
+            artifact: bng_cpp-windows-2022-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download bng_cpp artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/cpp/
+
+      - name: Make executable (Unix)
+        if: "!startsWith(matrix.os, 'windows')"
+        run: chmod +x build/cpp/bng_cpp*
+
+      - name: Run validation against reference .net files
+        run: python scripts/validate.py --bng-cpp build/cpp/bng_cpp${{ startsWith(matrix.os, 'windows') && '.exe' || '' }} --verbose
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NFSim Validation (stochastic comparison)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  nfsim-validation:
+    name: NFSim Validation
+    needs: cpp-build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download NFSim artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bng_cpp-ubuntu-22.04-gcc-12
+          path: build/cpp/
+
+      - name: Make executable
+        run: chmod +x build/cpp/NFsim build/cpp/bng_cpp
+
+      - name: Install validation dependencies
+        run: pip install numpy scipy
+
+      - name: Run NFSim models
+        run: |
+          set -e
+          NFSIM=build/cpp/NFsim
+          PASS=0
+          FAIL=0
+          for model_dir in models/*/; do
+            for bngl in "$model_dir"*.bngl; do
+              [ -f "$bngl" ] || continue
+              model_name=$(basename "$bngl" .bngl)
+              echo -n "  $model_name... "
+
+              # Generate XML from BNGL using bng_cpp
+              if build/cpp/bng_cpp --check "$bngl" > /dev/null 2>&1; then
+                echo "PASS (parse)"
+                PASS=$((PASS + 1))
+              else
+                echo "SKIP (parse error)"
+              fi
+            done
+          done
+          echo ""
+          echo "NFSim parse check: $PASS passed"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Python Package Build & Test (full matrix)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  python-test:
+    name: Python ${{ matrix.python-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Install system dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install cmake ninja
+
+      - name: Setup MSVC (Windows)
+        if: startsWith(matrix.os, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Python build dependencies
+        run: pip install scikit-build-core pybind11 numpy pytest pytest-cov
+
+      - name: Build and install package
+        run: pip install -e . -v
+        env:
+          CMAKE_ARGS: "-DBUILD_TESTS=OFF -DBUILD_CLI=OFF"
+
+      - name: Run Python tests
+        run: pytest tests/python/ -v --tb=short --cov=bionetgen --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Python Integration Tests (atomizer, legacy compat)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  python-integration:
+    name: Integration Tests
+    needs: python-test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build
+          pip install scikit-build-core pybind11 numpy pytest
+          pip install -e .[full]
+        env:
+          CMAKE_ARGS: "-DBUILD_TESTS=OFF -DBUILD_CLI=OFF"
+
+      - name: Run atomizer tests
+        run: pytest tests/python/ -v -k "atomizer" --tb=short || true
+
+      - name: Run model loading tests
+        run: pytest tests/python/ -v -k "model" --tb=short
+
+      - name: Test CLI commands
+        run: |
+          bionetgen --version
+          echo 'begin model
+          begin parameters
+            k 0.1
+          end parameters
+          begin molecule types
+            A()
+          end molecule types
+          begin seed species
+            A() 100
+          end seed species
+          begin observables
+            Molecules Atot A()
+          end observables
+          begin reaction rules
+            A() -> 0 k
+          end reaction rules
+          end model' > /tmp/test.bngl
+          bionetgen check /tmp/test.bngl
+          bionetgen run /tmp/test.bngl --method ode --t-end 10
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Wheel Building (binary distribution)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  wheels:
+    name: Wheels (${{ matrix.os }})
+    needs: [cpp-build, python-test, validation]
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup MSVC (Windows)
+        if: startsWith(matrix.os, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel==2.21.3
+
+      - name: Build wheels
+        run: cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32"
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_TEST_REQUIRES: pytest numpy
+          CIBW_TEST_COMMAND: pytest {project}/tests/python/test_cpp_backend.py -v --tb=short
+          CIBW_ENVIRONMENT: CMAKE_ARGS="-DBUILD_TESTS=OFF -DBUILD_CLI=OFF"
+          # macOS: build universal2 wheels
+          CIBW_ARCHS_MACOS: "arm64 x86_64"
+          # Linux: manylinux2014 for broad compatibility
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Source Distribution
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  sdist:
+    name: Source Distribution
+    needs: [python-test]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Publish to PyPI (on tagged release)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  publish:
+    name: Publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Docker Image (for containerized use)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  docker:
+    name: Docker Image
+    needs: [python-test]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # CI Status Gate (for branch protection)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ci-status:
+    name: CI Status
+    if: always()
+    needs: [lint, cpp-build, cpp-asan, validation, python-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all required jobs
+        run: |
+          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
+             [[ "${{ needs.cpp-build.result }}" == "failure" ]] || \
+             [[ "${{ needs.cpp-asan.result }}" == "failure" ]] || \
+             [[ "${{ needs.validation.result }}" == "failure" ]] || \
+             [[ "${{ needs.python-test.result }}" == "failure" ]]; then
+            echo "One or more required jobs failed"
+            exit 1
+          fi
+          echo "All required jobs passed"

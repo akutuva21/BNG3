@@ -1,0 +1,627 @@
+package Function;
+
+# pragmas
+use strict;
+use warnings;
+
+# Perl Modules
+use Storable qw(dclone);
+use Class::Struct;
+use FindBin;
+use lib $FindBin::Bin;
+
+# BNG Modules
+use ParamList;
+use Expression;
+
+
+
+struct Function =>
+{
+    Name => '$',
+    Args => '@',
+    Expr => 'Expression',
+    LocalHash => '%',
+};
+
+
+###
+###
+###
+
+
+# create a copy of this function.
+# 
+sub clone
+{
+    return (dclone(shift), '');
+}
+
+
+###
+###
+###
+
+sub evaluate
+{
+    my $fcn   = shift @_;
+    my $args  = @_ ? shift @_ : [];
+    my $plist = @_ ? shift @_ : undef;
+    my $level = @_ ? shift @_ : 0;
+
+    # create local parameterList
+    my $local_plist = $plist->getChildList();
+    
+    # set local variables equal to the arguments
+    my $ii=1;  # first arg is function name
+    while ( $ii < @$args )
+    {                
+        $local_plist->set( $fcn->Args->[$ii-1], $args->[$ii], 1, $args->[$ii]->Type );
+        ++$ii;
+    }
+       
+    # evaluate function expression
+    return $fcn->Expr->evaluate($local_plist, $level+1);
+}
+
+
+###
+###
+###
+
+
+
+# return a cloned function with local elements evaluated
+sub evaluate_local
+{
+    my $fcn   = shift;
+    my $args  = (@_) ? shift : [];
+    my $plist = (@_) ? shift : undef;
+    my $level = (@_) ? shift : 0;
+
+    my ($local_fcn, $err) = $fcn->clone( $plist, $level+1 );
+    
+    # create local parameterList
+    my $local_plist = $plist->getChildList();
+    # set local variables equal to the arguments
+    my $ii=1;  # first arg is function name
+    while ( $ii < @$args )
+    {
+        $local_plist->set( $fcn->Args->[$ii-1], $args->[$ii], 1 );
+        ++$ii;
+    }
+    
+    # locally evaluate function expression
+    my $expr = $local_fcn->Expr->evaluate_local($local_plist, $level+1);
+    $local_fcn->Expr($expr);
+
+    # check if local variables are unused
+    my $bad_args = [];
+    $ii=0;
+    while ( $ii < @{$local_fcn->Args} )
+    {
+        my ($dep, $err) = $expr->depends( $plist, $fcn->Args->[$ii] );
+        if ($dep)
+        {
+            # do nothing
+            ++$ii;
+        }
+        else
+        {
+            # remove argument
+            splice @{$local_fcn->Args}, $ii, 1;
+            push @$bad_args, $ii+1;
+        }
+    }    
+
+    return $local_fcn, $bad_args;
+}
+
+
+###
+###
+###
+
+
+# check for local observable dependency, return true if found
+sub checkLocalDependency
+{
+    my $fcn = shift;
+    my $plist = (@_) ? shift : undef;
+    my $level = (@_) ? shift : 0;
+
+    return  $fcn->Expr->checkLocalDependency( $plist, $level+1 );
+}
+
+###
+###
+###
+
+
+sub readString
+{
+    my $fun    = shift;
+    my $string = shift;
+    my $model  = shift;
+    my $err    = '';
+
+    my $plist = $model->ParamList;
+    
+    # Remove leading whitespace
+    $string =~ s/^\s*//;
+
+    # Check if first token is an index
+    $string =~ s/^\s*\d+\s+//; # Can't deprecate this because indices used in NET files
+
+    # Remove leading label, if exists
+    if ( $string =~ s/^\s*(\w+)\s*:\s+// )
+    {
+	    # Check label for leading number
+		my $label = $1;
+		if ($label =~ /^\d/) {  return "Syntax error (label begins with a number) at '$label'";  }
+    }
+    
+	# Check name for leading number
+	my $string_left = $string;
+	unless ( $string_left =~ s/^([A-Za-z_]\w*)// )
+	{ 
+		return "Syntax error (function name begins with a number) at '$string'";
+	}
+
+    # Next token is function Name
+    if ( $string =~ s/^\s*([A-Za-z0-9_]+)\s*// )
+    {
+        my $name = $1;
+        $fun->Name($name);
+    
+        # Make sure function name not the same as built-in functions --Leonard
+		if ( Expression::isBuiltIn($name) ){
+			return "Cannot use built-in function name '$name' as a user-defined function name.";
+		}
+    }
+    else
+    {
+        my ($name) = split( ' ', $string );
+        return ("Invalid function name '$name': may contain only alphanumeric characters and underscore");
+    }
+
+    # Process arguments to function (if any)
+    my @Args = ();
+    if ( $string =~ s/^[(]\s*// )
+    {
+        while (1)
+        {
+            if ( $string =~ s/^\s*([A-Za-z0-9_]+)\s*// )
+            {
+                my $arg = $1;
+                # Define argument as an allowed local variable in $plist
+                if ( $plist->set( $arg, '0', 1, 'Local' ) )
+                {
+                    my $name = $fun->Name;
+                    return ("Local argument $arg to Function $name matches previously defined variable");
+                }
+                #printf "Added argument %s to function %s\n", $arg, $fun->Name;
+                push @Args, $arg;
+            }
+            elsif ( $string =~ s/^[,]\s*// )
+            {
+                next;
+            }
+            elsif ( $string =~ s/^[)]\s*// )
+            {
+                last;
+            }
+            else
+            {
+                my $name= $fun->Name;
+                return ("Unrecognized argument at $string in declaration of function $name.");
+            }
+        }
+        $fun->Args( [@Args] );
+    }
+
+    # Remove '=' if present (but NOT '==')
+    $string=~ s/(?<!=)[=](?!=)\s*//;# use lookarounds to avoid matching '=='
+
+    # Read expression defining function.  Function arguments are "local" variables
+    my $expr = Expression->new();
+    $expr->setAllowForward(1);  # don't complain if expression refers to undefined parameters
+    if ( my $err = $expr->readString( \$string, $plist ) ) {  return ($err);  }
+    if ($string) {  return ("Syntax error at $string");  }
+    $expr->setAllowForward(0);
+
+    $fun->Expr($expr);
+
+    # Define parameter with name of the Function
+    if ( $plist->set( $fun->Name, $expr, 1, "Function", $fun ) )
+    {
+        my $name = $fun->Name;
+        return ("Function name $name matches previously defined variable");
+    }
+
+    $fun->unsetArgs($plist);
+
+    return '';
+}
+
+
+###
+###
+###
+
+
+sub toString
+{
+    my $fun   = shift @_;
+    my $plist = @_ ? shift @_ : undef;
+    my $include_equal = (@_) ? shift : 0;
+    # used for aligning columns nicely
+    my $max_length    = (@_) ? shift : 0;
+
+    my $name = defined $fun->Name ? $fun->Name : "anon";
+    my $string = $name . '(' . join(',', @{$fun->Args}) . ')';
+    if ( $fun->Expr )
+    {
+        $string .= ($include_equal) ? ' = ' : ' ';
+
+        # Check for old TFUN format (uppercase)
+        if ($fun->Expr->tfunFile) {
+            $string .= "TFUN(" . $fun->Expr->ctrName . ",'" . $fun->Expr->tfunFile . "')";
+        }
+        # For new tfun and all other expressions, use Expression's toString
+        # Expression->toString will automatically reconstruct tfun() calls from tfunData
+        else {
+            $string .= $fun->Expr->toString($plist);
+        }
+    }
+
+    if ($include_equal and $max_length)
+    {   # align equal signs
+        $string =~ /=/g;
+        my $n_spaces = $max_length - pos $string;
+        if ($n_spaces > 0)
+        {
+            my $spaces = ' ' x $n_spaces;
+            $string =~ s/=/$spaces=/;
+        }
+    }
+
+    return $string;
+}
+
+# Helper function to format tfun data as string
+sub format_tfun_string
+{
+    my $data = shift;
+    my $str = 'tfun(';
+
+    if ($data->{mode} eq 'file') {
+        # File-based: tfun('file.tfun', index, method=>"...")
+        $str .= "'" . $data->{file} . "'";
+        $str .= "," . $data->{index};
+        if ($data->{method} && $data->{method} ne 'linear') {
+            $str .= ',method=>"' . $data->{method} . '"';
+        }
+    }
+    elsif ($data->{mode} eq 'inline') {
+        # Inline: tfun([x...], [y...], index, method=>"...")
+        $str .= "[" . join(",", @{$data->{x_vals}}) . "]";
+        $str .= ",[" . join(",", @{$data->{y_vals}}) . "]";
+        $str .= "," . $data->{index};
+        if ($data->{method} && $data->{method} ne 'linear') {
+            $str .= ',method=>"' . $data->{method} . '"';
+        }
+    }
+
+    $str .= ')';
+    return $str;
+}
+
+
+###
+###
+###
+
+
+sub toCVodeString
+# construct a call, declaration or definition for this function in CVode.
+{
+    my $fcn     = shift;                 # this function
+    my $plist   = (@_) ? shift : undef;  # reference to ParamList
+    my $arghash = (@_) ? shift : {};     # reference to argument hash
+   
+    # set default mode
+    unless ( exists $arghash->{fcn_mode} )
+    {    $arghash->{fcn_mode} = 'call';   }
+
+    # set default indent
+    unless ( exists $arghash->{indent} )
+    {    $arghash->{indent} = '';   }
+   
+    my $string = '';
+    if ( $arghash->{fcn_mode} eq 'call' )
+    {
+        # generate the function call
+        my @args = ();
+        if ( @{$fcn->Args} )
+        {
+            if ( exists $arghash->{rrefs} and exists $arghash->{reactants} )
+            {
+                my $rrefs = $arghash->{rrefs};
+                my $reactants = $arghash->{reactants};
+                if ( ref $rrefs eq 'HASH' )
+                {
+                    foreach my $tag ( @{$fcn->Args} )
+                    {
+                        unless ( (exists $rrefs->{$tag}) and (exists $reactants->[$rrefs->{$tag}]) )
+                        {   return "could not find reactant or tag corresponding to ratelaw argument!";   }
+                        push @args, ($reactants->[$rrefs->{$tag}])->getCVodeName;
+                    }
+                }
+                else
+                {   return "ratelaw depends on tagged reactants and RRefs hash is missing!";   }
+            }
+            else
+            {
+                push @args, @{$fcn->Args};
+            }
+        }
+        push @args, 'expressions', 'observables';
+        $string = $arghash->{indent} . $fcn->Name . '(' . join(',', @args) . ')';
+    }
+    elsif ( $arghash->{fcn_mode} eq 'declare' ) 
+    {
+        # generate a declaration string
+        my @args = ( (map { "double $_" } @{$fcn->Args}), 'N_Vector expressions', 'N_Vector observables' );
+        $string = $arghash->{indent} . "double " . $fcn->Name . " ( " . join(', ', @args) . " );\n";
+    }
+    elsif ( $arghash->{fcn_mode} eq 'define' )
+    {
+        # generate a definition string
+        my @args = ( (map { "double $_" } @{$fcn->Args}), 'N_Vector expressions', 'N_Vector observables' );
+
+        $string .= $arghash->{indent} . "/* user-defined function " . $fcn->Name . " */\n";
+        $string .= $arghash->{indent} . "double " . $fcn->Name . " ( " . join(', ', @args) . " )\n";
+        $string .= $arghash->{indent} . "{\n";
+        $string .= $arghash->{indent} . "    return " . $fcn->Expr->toCVodeString($plist) . ";\n"; 
+        $string .= $arghash->{indent} . "}\n";     
+    }
+    else
+    {    die "Error in Function->toCVodeString(): did not recognize fcn_mode argument!";   }
+
+    return $string;
+}
+
+
+
+###
+###
+###
+
+
+
+sub toMatlabString
+# construct a call, declaration or definition for this function in CVode.
+{
+    my $fcn     = shift @_;               # this function
+    my $plist   = @_ ? shift @_ : undef;  # reference to ParamList
+    my $arghash = @_ ? shift @_ : {};     # reference to argument hash
+   
+    # set default mode
+    unless ( exists $arghash->{fcn_mode} )
+    {    $arghash->{fcn_mode} = 'call';   }
+
+    # set default indent
+    unless ( exists $arghash->{indent} )
+    {    $arghash->{indent} = '';   }
+   
+    my $string = '';
+    if ( $arghash->{fcn_mode} eq 'call' )
+    {
+        # generate the function call
+        my @args = ();
+        if ( @{$fcn->Args} )
+        {
+            if ( exists $arghash->{rrefs} and exists $arghash->{reactants} )
+            {
+                my $rrefs = $arghash->{rrefs};
+                my $reactants = $arghash->{reactants};
+                if ( ref $rrefs eq 'HASH' )
+                {
+                    foreach my $tag ( @{$fcn->Args} )
+                    {
+                        unless ( (exists $rrefs->{$tag}) and (exists $reactants->[$rrefs->{$tag}]) )
+                        {   return "could not find reactant or tag corresponding to ratelaw argument!";   }
+                        push @args, ($reactants->[$rrefs->{$tag}])->getMatlabName;
+                    }
+                }
+                else
+                {   return "ratelaw depends on tagged reactants and RRefs hash is missing!";   }
+            }
+            else
+            {
+                push @args, @{$fcn->Args};
+            }
+        }
+        push @args, 'expressions', 'observables';
+        $string = $arghash->{indent} . $fcn->Name . '(' . join(',', @args) . ')';
+    }
+    elsif ( $arghash->{fcn_mode} eq 'declare' ) 
+    {
+        # generate a declaration string
+        # NOTHING TO DO: Matlab does not require function declarations
+        $string = '';
+    }
+    elsif ( $arghash->{fcn_mode} eq 'define' )
+    {
+        # generate a definition string
+        my @args = ( @{$fcn->Args}, 'expressions', 'observables' );
+        $string .= $arghash->{indent} . '% function ' . $fcn->Name . "\n";
+        $string .= $arghash->{indent} . 'function [val] = ' . $fcn->Name . '(' . join(', ', @args) . ")\n"
+                                      . '    val = ' . $fcn->Expr->toMatlabString($plist) . ";\n"
+                                      . "end\n";                      
+    }
+    else
+    {    die "Error in Function->toMatlabString(): did not recognize fcn_mode argument!";   }
+
+    return $string;
+}
+
+
+
+###
+###
+###
+
+
+
+sub setArgs
+{
+    my $fun= shift;
+    my $plist= shift;
+  
+    foreach my $arg ( @{$fun->Args} )
+    {
+        $plist->set( $arg, '0', 1, 'Local' ); 
+    }
+    return '';
+}
+
+
+
+###
+###
+###
+
+
+
+sub unsetArgs
+{
+    my $fun   = shift;
+    my $plist = shift;
+  
+    # Delete ParamList entries for Local arguments
+    foreach my $arg ( @{$fun->Args} )
+    {
+        $plist->deleteLocal($arg);
+    }
+    return '';
+}
+
+
+
+###
+###
+###
+
+
+
+sub toXML
+{
+    my $fun    = shift;
+    my $plist  = (@_) ? shift : '';
+    my $indent = (@_) ? shift : '';
+
+    $fun->setArgs($plist);
+
+    my $indent2 = '  ' . $indent;
+    my $indent3 = '  ' . $indent2;
+    my $string  = $indent . "<Function";
+
+    # Attributes
+    # id
+    $string .= " id=\"".$fun->Name."\"";
+
+    # AS-2021
+    # if we have a TFUN type function (old uppercase syntax), we need to add
+    # some attributes to the function XML
+    if($fun->Expr->tfunFile)
+    {
+        # we need type and file attributes (old TFUN format)
+        $string .= " type=\"TFUN\"";
+        $string .= " file=\"".$fun->Expr->tfunFile."\"";
+        $string .= " ctrName=\"".$fun->Expr->ctrName."\"";
+    }
+    # New lowercase tfun support
+    elsif ($fun->Expr->tfunData) {
+        my $data = $fun->Expr->tfunData;
+        # For file-based tfun, emit TFUN XML for NFsim compatibility
+        if ($data->{mode} eq 'file') {
+            $string .= " type=\"TFUN\"";
+            $string .= " file=\"".$data->{file}."\"";
+            $string .= " ctrName=\"".$data->{index}."\"";
+            $string .= " method=\"".$data->{method}."\"" if $data->{method};
+        }
+        # For inline tfun, include all necessary data in XML attributes
+        else {
+            $string .= " type=\"TFUN\"";
+            $string .= " mode=\"inline\"";
+            $string .= " ctrName=\"".$data->{index}."\"";
+
+            # Encode x and y arrays as comma-separated strings
+            my $x_str = join(',', @{$data->{x_vals}});
+            my $y_str = join(',', @{$data->{y_vals}});
+            $string .= " xData=\"".$x_str."\"";
+            $string .= " yData=\"".$y_str."\"";
+
+            # Include method if specified
+            $string .= " method=\"".$data->{method}."\"" if $data->{method};
+        }
+    }
+    # AS-2021
+
+    # close up this level
+    $string .= ">\n";
+
+    # Arguments
+    if ( @{$fun->Args} )
+    {
+        $string.= $indent2 . "<ListOfArguments>\n";
+        foreach my $arg (@{$fun->Args})
+        {
+            $string .= $indent3 . "<Argument";
+            $string .= " id=" . "\"" . $arg . "\"";
+            $string .= "/>\n"
+        }
+        $string .= $indent2 . "</ListOfArguments>\n";
+    }
+
+    # References
+    $string.= $indent2."<ListOfReferences>\n";
+    # AS-2021
+    # if we have a TFUN type function, we need to add 
+    # a default reference
+    if($fun->Expr->tfunFile)
+    {
+        # we need type and file attributes
+        $string .= $indent3 . "<Reference name=\"__TFUN_VAL__\" type=\"Constant\"/>\n"
+    }
+    # AS-2021
+    my $vhash= $fun->Expr->getVariables($plist);
+  
+    foreach my $type (sort keys %{$vhash})
+    {
+        foreach my $var (sort keys %{$vhash->{$type}})
+        {
+            #print "$type $var\n";
+            $string .= $indent3 . ($vhash->{$type}->{$var})->toXMLReference('Reference', '', $plist);
+        }    
+    }
+    $string .= $indent2 . "</ListOfReferences>\n";
+    
+    $string .= $indent2 . "<Expression> ";
+    $string .= $fun->Expr->toXML($plist);
+    $string .= " </Expression>\n";
+
+    $string .= $indent."</Function>\n";
+
+    $fun->unsetArgs($plist);
+
+    return ($string);
+}
+
+
+
+
+
+1;
