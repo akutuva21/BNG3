@@ -28,7 +28,7 @@ class TestGetVersionJson(unittest.TestCase):
         # Determine the absolute path to get_version_json.py relative to the root dir
         script_dir = os.path.dirname(os.path.abspath(__file__))
         target_path = os.path.abspath(
-            os.path.join(script_dir, "..", "bionetgen", "assets", "get_version_json.py")
+            os.path.join(script_dir, "..", "..", "python", "bionetgen", "assets", "get_version_json.py")
         )
 
         with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
