@@ -101,6 +101,9 @@ target_link_libraries(bng_engine PUBLIC
     sundials_sunmatrixdense_static
 )
 target_compile_definitions(bng_engine PUBLIC BNG_CPP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(MSVC)
+    target_compile_definitions(bng_engine PUBLIC _USE_MATH_DEFINES)
+endif()
 
 # =============================================================================
 # nfsim_core (Network-free stochastic simulator)
