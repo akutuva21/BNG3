@@ -46,6 +46,7 @@ def test_to_dataframe(sample_result):
 def test_plot_runs(sample_result, monkeypatch):
     pytest.importorskip("matplotlib")
     import matplotlib.pyplot as plt
+
     monkeypatch.setattr(plt, "show", lambda: None)
     sample_result.plot(show=False)
 

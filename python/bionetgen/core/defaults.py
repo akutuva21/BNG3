@@ -8,6 +8,8 @@ except Exception:
 
     def get_version_banner():
         return ""
+
+
 from .version import get_version
 
 

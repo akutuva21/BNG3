@@ -256,5 +256,5 @@ if(BUILD_PYTHON_BINDINGS)
     )
     target_compile_definitions(_bionetgen_cpp PRIVATE TIXML_USE_STL)
 
-    install(TARGETS _bionetgen_cpp DESTINATION bionetgen)
+    install(TARGETS _bionetgen_cpp DESTINATION bionetgen COMPONENT python)
 endif()

@@ -24,7 +24,9 @@ struct ParseResult {
 ParseResult parseFile(const std::string& path) {
     std::ifstream inputStream(path);
     if (!inputStream) {
-        return {.syntaxErrors = -1, .opened = false, .model = nullptr, .error = {}};
+        ParseResult result;
+        result.syntaxErrors = -1;
+        return result;
     }
 
     antlr4::ANTLRInputStream input(inputStream);
@@ -33,12 +35,9 @@ ParseResult parseFile(const std::string& path) {
     BNGParser parser(&tokens);
     auto* tree = parser.prog();
 
-    ParseResult result {
-        .syntaxErrors = static_cast<int>(parser.getNumberOfSyntaxErrors()),
-        .opened = true,
-        .model = nullptr,
-        .error = {},
-    };
+    ParseResult result;
+    result.syntaxErrors = static_cast<int>(parser.getNumberOfSyntaxErrors());
+    result.opened = true;
 
     if (result.syntaxErrors != 0) {
         return result;
