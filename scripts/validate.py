@@ -85,8 +85,17 @@ def compare_sections(ref_sections, test_sections, section_name):
     return True, f"  {section_name}: OK ({len(ref_lines)} entries)"
 
 
-def run_validation(bng_cpp, validate_dir, verbose=False):
-    """Run bng_cpp on all .bngl files and compare against reference .net."""
+def run_validation(bng_cpp, validate_dir, verbose=False, skip_models=None):
+    """Run bng_cpp on all .bngl files and compare against reference .net.
+
+    Args:
+        bng_cpp: Path to bng_cpp executable
+        validate_dir: Path to validation directory
+        verbose: Whether to print detailed output
+        skip_models: List of model names (without .bngl) to skip
+    """
+    if skip_models is None:
+        skip_models = []
 
     dat_dir = validate_dir / "DAT_validate"
     bngl_files = sorted(validate_dir.glob("*.bngl"))
@@ -96,6 +105,13 @@ def run_validation(bng_cpp, validate_dir, verbose=False):
 
     for bngl in bngl_files:
         model_name = bngl.stem
+
+        if model_name in skip_models:
+            results["skip"] += 1
+            if verbose:
+                details.append(f"SKIP  {model_name} (excluded)")
+            continue
+
         ref_net = dat_dir / f"{model_name}.net"
 
         if not ref_net.exists():
@@ -188,6 +204,11 @@ def main():
     )
     parser.add_argument("--bng-cpp", default=None, help="Path to bng_cpp executable")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show all results")
+    parser.add_argument(
+        "--skip",
+        default="",
+        help="Comma-separated list of model names to skip (without .bngl extension)",
+    )
     args = parser.parse_args()
 
     # Find bng_cpp
@@ -195,7 +216,10 @@ def main():
     repo_dir = script_dir.parent
 
     if args.bng_cpp:
-        bng_cpp = Path(args.bng_cpp)
+        bng_cpp = Path(args.bng_cpp).resolve()
+        if not bng_cpp.exists():
+            print(f"ERROR: bng_cpp not found at {bng_cpp}")
+            sys.exit(1)
     else:
         # Try common build locations
         candidates = [
@@ -218,12 +242,19 @@ def main():
         print(f"ERROR: Validation directory not found: {validate_dir}")
         sys.exit(1)
 
+    # Parse skip list
+    skip_models = [m.strip() for m in args.skip.split(",") if m.strip()]
+
     print(f"BNG C++:    {bng_cpp}")
     print(f"Validation: {validate_dir}")
     print(f"Reference:  {validate_dir / 'DAT_validate'}")
+    if skip_models:
+        print(f"Skipping:   {', '.join(skip_models)}")
     print()
 
-    results, details = run_validation(bng_cpp, validate_dir, verbose=args.verbose)
+    results, details = run_validation(
+        bng_cpp, validate_dir, verbose=args.verbose, skip_models=skip_models
+    )
 
     # Print details
     for line in details:
