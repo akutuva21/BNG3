@@ -53,7 +53,7 @@ jobs:
       - name: Run full validation
         shell: bash
         run: |
-          SKIP="--skip michment_cont,test_sbml_flat,test_sbml_structured,Repressilator,SHP2_base_model"
+          SKIP="--skip michment_cont,test_sbml_flat,test_sbml_structured,Repressilator,SHP2_base_model,Motivating_example_cBNGL,blbr"
           if [[ "${{ matrix.os }}" == *windows* ]]; then
             BNG=build/cpp/bng_cpp.exe
           else

@@ -750,20 +750,21 @@ std::string reactionCenterSignature(
     // - Molecule-level reaction center refs (e.g., MolDel) use only the pattern
     //   index as identity — all embeddings of a molecule-level delete look identical,
     //   so only one embedding survives per rule application to a species.
-    // - Component-level reaction center refs (e.g., AddBond, DeleteBond) use the
-    //   target node pointer to distinguish different physical bonds/sites.
+    // - Component-level reaction center refs (e.g., AddBond, DeleteBond) use a
+    //   structural node identifier so symmetric bonds/sites collapse together.
     // Sort the parts so automorphic embeddings (swapping equivalent target
     // molecules/components) collapse to the same signature.
     std::vector<std::string> parts;
     for (const auto& ref : reactionCenter) {
         std::ostringstream out;
         if (ref.isComponent) {
-            // Component-level: use target pointer to distinguish different bonds
+            // Component-level: use a structural identifier so symmetric sites
+            // collapse to the same embedding signature.
             BNGcore::Node* sourceNode =
                 infos.at(ref.patternIndex).molecules.at(ref.moleculeIndex).components.at(ref.componentIndex).node;
             auto* target = map.mapf(sourceNode);
             if (target == nullptr) continue;
-            out << reinterpret_cast<std::uintptr_t>(target);
+            out << canonicalNodeId(target);
         } else {
             // Molecule-level: use pattern index only (Perl convention —
             // all embeddings of molecule-level operations look the same)
