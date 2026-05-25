@@ -388,6 +388,20 @@ void runSimulation(
         opts.outputStepInterval = static_cast<std::size_t>(parseScalarValue(outputStepIntervalText, model));
     }
 
+    // Parse sparse option (request sparse Jacobian for large networks)
+    const auto sparseText = lowercase(stripQuotes(readArgument(action, "sparse", "0")));
+    opts.sparse = (sparseText == "1" || sparseText == "true");
+
+    // Parse evaluate_expressions option (BNG2: keep symbolic expressions in .net)
+    const auto evalExprText = lowercase(stripQuotes(readArgument(action, "evaluate_expressions", "1")));
+    opts.evaluateExpressions = (evalExprText != "0" && evalExprText != "false");
+
+    // Parse check_product_scale option (validate product concentrations)
+    const auto checkProdScaleText = readArgument(action, "check_product_scale", "");
+    if (!checkProdScaleText.empty()) {
+        opts.checkProductScale = parseScalarValue(checkProdScaleText, model);
+    }
+
     if (verbose) {
         std::cerr << "[bng_cpp] Simulating with method=" << opts.method
                   << " t_end=" << opts.tEnd

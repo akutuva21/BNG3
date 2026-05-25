@@ -33,6 +33,9 @@ struct OdeOptions {
     bool printEnd = false;         // Output final state when simulation stops (stop_if or steady_state)
     std::size_t outputStepInterval = 0; // Output every N internal steps (0 = disabled, use n_steps timing)
     std::string netfile;           // Custom .net file to read instead of auto-generating
+    bool sparse = false;           // Use sparse Jacobian (for large networks >1000 species)
+    bool evaluateExpressions = true; // Evaluate symbolic expressions in .net output
+    double checkProductScale = 0.0;  // Warn if product concentrations exceed this (0 = disabled)
 };
 
 struct OdeResult {
