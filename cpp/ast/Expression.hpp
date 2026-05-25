@@ -3,6 +3,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bng::ast {
@@ -28,6 +29,10 @@ public:
     static Expression observableRef(std::string name, std::vector<Expression> args);
 
     double evaluate(const std::function<double(const std::string&)>& resolveIdentifier, double t = 0.0) const;
+    double evaluateLocal(const std::function<double(const std::string&)>& resolveIdentifier,
+                         const std::unordered_map<std::string, double>& localContext,
+                         double t = 0.0) const;
+    bool checkLocalDependency(const std::set<std::string>& localNames) const;
     std::set<std::string> getDependencies() const;
     std::string toString() const;
 

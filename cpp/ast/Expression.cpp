@@ -292,6 +292,25 @@ double Expression::evaluate(const std::function<double(const std::string&)>& res
     throw std::runtime_error("Unsupported expression kind");
 }
 
+double Expression::evaluateLocal(const std::function<double(const std::string&)>& resolveIdentifier,
+                                  const std::unordered_map<std::string, double>& localContext,
+                                  double t) const {
+    auto localResolver = [&](const std::string& name) -> double {
+        auto it = localContext.find(name);
+        if (it != localContext.end()) return it->second;
+        return resolveIdentifier(name);
+    };
+    return evaluate(localResolver, t);
+}
+
+bool Expression::checkLocalDependency(const std::set<std::string>& localNames) const {
+    auto deps = getDependencies();
+    for (const auto& dep : deps) {
+        if (localNames.count(dep) > 0) return true;
+    }
+    return false;
+}
+
 std::set<std::string> Expression::getDependencies() const {
     std::set<std::string> deps;
     if (kind_ == ExpressionKind::Identifier && text_ != "time") {
