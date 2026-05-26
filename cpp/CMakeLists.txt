@@ -61,6 +61,7 @@ add_library(bng_engine STATIC
     engine/PlaSimulator.cpp
     engine/PsaSimulator.cpp
     engine/HybridModelGenerator.cpp
+    engine/NFModelAdapter.cpp
     io/NetWriter.cpp
     io/NetReader.cpp
     io/XmlWriter.cpp

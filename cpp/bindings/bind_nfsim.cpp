@@ -2,10 +2,6 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
-#include <cstdio>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 #include <map>
@@ -13,32 +9,13 @@
 #include <random>
 
 #include "ast/Model.hpp"
-#include "io/XmlWriter.hpp"
 
 #include "NFcore/NFcore.hh"
 #include "NFutil/NFutil.hh"
 #include "NFinput/NFinput.hh"
 
 namespace py = pybind11;
-namespace fs = std::filesystem;
 using namespace bng::ast;
-
-namespace {
-
-struct TempFileGuard {
-    std::string path;
-    ~TempFileGuard() { if (!path.empty()) std::remove(path.c_str()); }
-};
-
-std::string make_temp_xml_path() {
-    auto tmp_dir = fs::temp_directory_path();
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dist(100000, 999999);
-    return (tmp_dir / ("nfsim_" + std::to_string(dist(gen)) + ".xml")).string();
-}
-
-} // anonymous namespace
 
 void bind_nfsim(py::module_& m) {
 
@@ -51,31 +28,19 @@ void bind_nfsim(py::module_& m) {
             throw std::invalid_argument("n_steps must be positive");
         }
 
-        // Step 1: Serialize model to XML string
-        std::string xml_content = bng::io::XmlWriter::write(model);
-
-        // Step 2: Write XML to a temp file with RAII cleanup
-        TempFileGuard tmp_guard;
-        tmp_guard.path = make_temp_xml_path();
-        {
-            std::ofstream out(tmp_guard.path);
-            if (!out) throw std::runtime_error("Failed to create temp file for NFSim XML");
-            out << xml_content;
-        }
-
-        // Step 3: Seed RNG
+        // Step 1: Seed RNG
         if (seed > 0) {
             NFutil::SEED_RANDOM(seed);
         }
 
-        // Step 4: Initialize NFSim system from XML with RAII
+        // Step 2: Initialize NFSim system directly from the C++ AST (no XML)
         int suggestedTraversalLimit = -1;
         std::unique_ptr<NFcore::System> system;
 
         {
             py::gil_scoped_release release;
-            system.reset(NFinput::initializeFromXML(
-                tmp_guard.path,
+            system.reset(NFinput::initializeFromModel(
+                model,
                 false,    // blockSameComplexBinding
                 -1,       // globalMoleculeLimit (unlimited)
                 verbose,
@@ -86,29 +51,29 @@ void bind_nfsim(py::module_& m) {
         }
 
         if (!system) {
-            throw std::runtime_error("Failed to initialize NFSim system from model XML");
+            throw std::runtime_error("Failed to initialize NFSim system from model");
         }
 
-        // Step 5: Prepare the system before any equilibration or simulation.
+        // Step 3: Prepare the system before any equilibration or simulation.
         {
             py::gil_scoped_release release;
             system->prepareForSimulation();
         }
 
-        // Step 6: Run equilibration if requested
+        // Step 4: Run equilibration if requested
         if (equilibrate > 0) {
             py::gil_scoped_release release;
             system->equilibrate(static_cast<double>(equilibrate));
         }
 
-        // Step 7: Collect observable names
+        // Step 5: Collect observable names
         std::vector<std::string> obs_names;
         for (auto* obs : system->getObsToOutput()) {
             if (obs) obs_names.push_back(obs->getName());
         }
         int n_obs = static_cast<int>(obs_names.size());
 
-        // Step 8: Run simulation in steps, collecting time-series data
+        // Step 6: Run simulation in steps, collecting time-series data
         double dt = t_end / static_cast<double>(n_steps);
         std::vector<double> time_points;
         std::vector<std::vector<double>> obs_series(n_obs);

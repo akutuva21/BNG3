@@ -1237,15 +1237,7 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
         }
 
         if (actionName == "simulate_nf") {
-            // NFSim simulation: write XML, invoke nfsim_core in-process
-            const auto xmlContent = io::XmlWriter::write(model, network.has_value() ? &(*network) : nullptr);
             const auto prefix = simulationPrefix(action, sourcePath);
-            const auto xmlPath = sourcePath.parent_path() / (prefix + ".xml");
-            {
-                std::ofstream xmlOut(xmlPath);
-                if (!xmlOut) throw std::runtime_error("Failed to write XML for NFSim: " + xmlPath.string());
-                xmlOut << xmlContent;
-            }
 
             // Parse simulation parameters
             const auto tEnd = stripQuotes(readArgument(action, "t_end", "10"));
@@ -1268,21 +1260,21 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
             int suggestedTraversalLimit = utlText.empty() ? 3 : std::stoi(utlText);
 
             if (verbose) {
-                std::cerr << "[bng_cpp] Running NFSim in-process: " << xmlPath << "\n";
+                std::cerr << "[bng_cpp] Running NFSim in-process (AST initialization)\n";
             }
 
-            // Initialize NFsim System from the XML file
-            NFcore::System *nfSystem = NFinput::initializeFromXML(
-                xmlPath.string(),
+            // Initialize NFsim System directly from the C++ AST (no XML).
+            std::unique_ptr<NFcore::System> nfSystem(NFinput::initializeFromModel(
+                model,
                 useComplex,
                 globalMoleculeLimit,
                 nfVerbose,
                 suggestedTraversalLimit,
                 evalCSLF,
-                connectivityFlag);
+                connectivityFlag));
 
             if (!nfSystem) {
-                throw std::runtime_error("NFSim: Failed to initialize system from XML: " + xmlPath.string());
+                throw std::runtime_error("NFSim: Failed to initialize system from model AST");
             }
 
             // Seed the RNG if requested

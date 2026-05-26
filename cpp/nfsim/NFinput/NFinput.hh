@@ -18,6 +18,10 @@
 
 using namespace NFcore;
 
+namespace bng::ast {
+	class Model;
+}
+
 
 
 //!  Functionality to handle input from XML files or command line arguments
@@ -61,6 +65,21 @@ namespace NFinput {
 	 */
 	System * initializeFromXML(
 			string filename,
+			bool blockSameComplexBinding,
+			int globalMoleculeLimit,
+			bool verbose,
+			int &suggestedTraversalLimit,
+			bool evaluateComplexScopedLocalFunctions=false,
+			bool connectivityFlag=false);
+
+	//! Initialize NFsim System directly from BNG3 C++ AST (no XML).
+	/*!
+		Constructs an NFcore::System from a bng::ast::Model without XML serialization
+		or TinyXML parsing. This is the preferred in-process initialization path for
+		BNG3 ↔ NFsim integration.
+	*/
+	System * initializeFromModel(
+			const bng::ast::Model& model,
 			bool blockSameComplexBinding,
 			int globalMoleculeLimit,
 			bool verbose,
