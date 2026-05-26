@@ -8,14 +8,12 @@ Usage:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import numpy as np
-
 
 RATE_LAW_MODELS = {
     "elementary": """
@@ -146,8 +144,8 @@ def parse_gdat(path):
     """Parse a .gdat file into column names and numpy array."""
     with open(path) as f:
         header = f.readline().strip()
-    col_names = header.lstrip('#').split()
-    data = np.loadtxt(path, comments='#')
+    col_names = header.lstrip("#").split()
+    data = np.loadtxt(path, comments="#")
     return col_names, data
 
 
@@ -174,7 +172,9 @@ def validate_elementary(data):
 def validate_saturation(data):
     """Saturation: product should increase monotonically."""
     product = data[:, 2]  # Ptot
-    monotonic = all(product[i+1] >= product[i] - 1e-10 for i in range(len(product)-1))
+    monotonic = all(
+        product[i + 1] >= product[i] - 1e-10 for i in range(len(product) - 1)
+    )
     return monotonic and product[-1] > 0, f"Ptot final={product[-1]:.2f}"
 
 
@@ -210,7 +210,9 @@ VALIDATORS = {
 
 def main():
     parser = argparse.ArgumentParser(description="Validate rate law implementations")
-    parser.add_argument("--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary")
+    parser.add_argument(
+        "--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary"
+    )
     args = parser.parse_args()
 
     bng_cpp = Path(args.bng_cpp)

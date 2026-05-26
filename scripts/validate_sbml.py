@@ -8,13 +8,11 @@ Usage:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
 
 SBML_TEST_MODELS = [
     "Motivating_example",
@@ -61,38 +59,38 @@ def validate_sbml_xml(xml_path):
         return [f"XML parse error: {e}"]
 
     # Check namespace
-    ns = root.tag.split('}')[0] + '}' if '}' in root.tag else ''
-    if 'sbml' not in root.tag.lower():
+    ns = root.tag.split("}")[0] + "}" if "}" in root.tag else ""
+    if "sbml" not in root.tag.lower():
         errors.append(f"Root element is not 'sbml': {root.tag}")
 
     # Check for required SBML elements
-    model_elem = root.find(f'{ns}model')
+    model_elem = root.find(f"{ns}model")
     if model_elem is None:
         errors.append("Missing <model> element")
         return errors
 
     # Check for species
-    species_list = model_elem.find(f'{ns}listOfSpecies')
+    species_list = model_elem.find(f"{ns}listOfSpecies")
     if species_list is None:
         errors.append("Missing <listOfSpecies>")
     else:
-        species = species_list.findall(f'{ns}species')
+        species = species_list.findall(f"{ns}species")
         if len(species) == 0:
             errors.append("No species defined")
 
     # Check for reactions
-    reactions_list = model_elem.find(f'{ns}listOfReactions')
+    reactions_list = model_elem.find(f"{ns}listOfReactions")
     if reactions_list is None:
         errors.append("Missing <listOfReactions>")
     else:
-        reactions = reactions_list.findall(f'{ns}reaction')
+        reactions = reactions_list.findall(f"{ns}reaction")
         if len(reactions) == 0:
             errors.append("No reactions defined")
 
     # Check for parameters
-    params_list = model_elem.find(f'{ns}listOfParameters')
+    params_list = model_elem.find(f"{ns}listOfParameters")
     if params_list is not None:
-        params = params_list.findall(f'{ns}parameter')
+        params = params_list.findall(f"{ns}parameter")
         if len(params) == 0:
             errors.append("listOfParameters exists but is empty")
 
@@ -118,8 +116,12 @@ def validate_with_libsbml(xml_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Validate SBML export")
-    parser.add_argument("--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary")
-    parser.add_argument("--models-dir", default="models", help="Directory with .bngl models")
+    parser.add_argument(
+        "--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary"
+    )
+    parser.add_argument(
+        "--models-dir", default="models", help="Directory with .bngl models"
+    )
     args = parser.parse_args()
 
     bng_cpp = Path(args.bng_cpp)
