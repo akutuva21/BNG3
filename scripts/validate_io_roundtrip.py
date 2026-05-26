@@ -7,12 +7,10 @@ Usage:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
 
 ROUNDTRIP_MODELS = [
     "Motivating_example",
@@ -40,11 +38,11 @@ def parse_net_sections(net_path):
 
     with open(net_path) as f:
         for line in f:
-            line = line.rstrip('\n')
-            if line.startswith('begin '):
-                current_section = line.strip().replace('begin ', '')
+            line = line.rstrip("\n")
+            if line.startswith("begin "):
+                current_section = line.strip().replace("begin ", "")
                 current_lines = []
-            elif line.startswith('end '):
+            elif line.startswith("end "):
                 if current_section:
                     sections[current_section] = current_lines
                 current_section = None
@@ -63,7 +61,7 @@ def compare_net_files(net1, net2):
 
     differences = []
 
-    for section in ['species', 'reactions', 'groups']:
+    for section in ["species", "reactions", "groups"]:
         if section not in sections1 and section not in sections2:
             continue
         if section not in sections1:
@@ -77,12 +75,16 @@ def compare_net_files(net1, net2):
         lines2 = sections2[section]
 
         if len(lines1) != len(lines2):
-            differences.append(f"Section '{section}' line count differs: {len(lines1)} vs {len(lines2)}")
+            differences.append(
+                f"Section '{section}' line count differs: {len(lines1)} vs {len(lines2)}"
+            )
             continue
 
         for i, (l1, l2) in enumerate(zip(lines1, lines2)):
             if l1 != l2:
-                differences.append(f"Section '{section}' line {i+1} differs:\n  '{l1}'\n  '{l2}'")
+                differences.append(
+                    f"Section '{section}' line {i+1} differs:\n  '{l1}'\n  '{l2}'"
+                )
                 if len(differences) > 5:
                     differences.append("... (truncated)")
                     return False, differences
@@ -92,8 +94,12 @@ def compare_net_files(net1, net2):
 
 def main():
     parser = argparse.ArgumentParser(description="Validate IO round-trip consistency")
-    parser.add_argument("--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary")
-    parser.add_argument("--models-dir", default="models", help="Directory containing .bngl models")
+    parser.add_argument(
+        "--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary"
+    )
+    parser.add_argument(
+        "--models-dir", default="models", help="Directory containing .bngl models"
+    )
     args = parser.parse_args()
 
     models_dir = Path(args.models_dir)

@@ -16,7 +16,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 NFSIM_MODELS = [
     "simple_system",
     "tlbr/tlbr",
@@ -27,8 +26,8 @@ def parse_gdat(path):
     """Parse a .gdat file into column names and numpy array."""
     with open(path) as f:
         header = f.readline().strip()
-    col_names = header.lstrip('#').split()
-    data = np.loadtxt(path, comments='#')
+    col_names = header.lstrip("#").split()
+    data = np.loadtxt(path, comments="#")
     return col_names, data
 
 
@@ -36,7 +35,9 @@ def run_bng3_nfsim(bng_cpp, model_bngl, seed, output_dir):
     """Run model through BNG3 in-process NFsim."""
     cmd = [bng_cpp, str(model_bngl)]
     env = os.environ.copy()
-    result = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True, env=env)
+    result = subprocess.run(
+        cmd, cwd=output_dir, capture_output=True, text=True, env=env
+    )
     if result.returncode != 0:
         print(f"  BNG3 failed: {result.stderr[:500]}", file=sys.stderr)
         return None
@@ -49,11 +50,16 @@ def run_upstream_nfsim(nfsim_bin, model_xml, seed, sim_time, output_dir):
     output_gdat = Path(output_dir) / "nfsim_output.gdat"
     cmd = [
         nfsim_bin,
-        "-xml", str(model_xml),
-        "-seed", str(seed),
-        "-sim", str(sim_time),
-        "-oSteps", "50",
-        "-o", str(output_gdat),
+        "-xml",
+        str(model_xml),
+        "-seed",
+        str(seed),
+        "-sim",
+        str(sim_time),
+        "-oSteps",
+        "50",
+        "-o",
+        str(output_gdat),
     ]
     result = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
     if result.returncode != 0:
@@ -91,12 +97,22 @@ def compare_gdat(file1, file2, tolerance):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate NFsim output between BNG3 and upstream")
-    parser.add_argument("--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary")
-    parser.add_argument("--nfsim", default="", help="Path to upstream NFsim binary (optional)")
-    parser.add_argument("--tolerance", type=float, default=0.1, help="Relative tolerance for comparison")
+    parser = argparse.ArgumentParser(
+        description="Validate NFsim output between BNG3 and upstream"
+    )
+    parser.add_argument(
+        "--bng-cpp", default="build/bng_cpp", help="Path to bng_cpp binary"
+    )
+    parser.add_argument(
+        "--nfsim", default="", help="Path to upstream NFsim binary (optional)"
+    )
+    parser.add_argument(
+        "--tolerance", type=float, default=0.1, help="Relative tolerance for comparison"
+    )
     parser.add_argument("--seed", type=int, default=12345, help="Random seed")
-    parser.add_argument("--models-dir", default="models", help="Directory containing .bngl models")
+    parser.add_argument(
+        "--models-dir", default="models", help="Directory containing .bngl models"
+    )
     args = parser.parse_args()
 
     models_dir = Path(args.models_dir)
@@ -128,7 +144,9 @@ def main():
 
             if args.nfsim and Path(args.nfsim).exists():
                 # Compare against upstream
-                nfsim_gdat = run_upstream_nfsim(args.nfsim, model_path, args.seed, 100, tmpdir)
+                nfsim_gdat = run_upstream_nfsim(
+                    args.nfsim, model_path, args.seed, 100, tmpdir
+                )
                 if nfsim_gdat is None:
                     print(f"  SKIP {model_name}: upstream NFsim failed")
                     skipped += 1
@@ -146,7 +164,9 @@ def main():
                 try:
                     _, data = parse_gdat(bng3_gdat)
                     if data.size > 0:
-                        print(f"  PASS {model_name} (BNG3 only, no upstream comparison)")
+                        print(
+                            f"  PASS {model_name} (BNG3 only, no upstream comparison)"
+                        )
                         passed += 1
                     else:
                         print(f"  FAIL {model_name}: empty output")
