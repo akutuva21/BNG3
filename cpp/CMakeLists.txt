@@ -1,5 +1,9 @@
 # cpp/CMakeLists.txt — Unified C++ build for BioNetGen core + NFSim
 
+add_compile_definitions(NFSIM_USE_EXPRTK)
+include_directories(${exprtk_SOURCE_DIR})
+
+
 # =============================================================================
 # nauty (graph isomorphism)
 # =============================================================================
@@ -170,6 +174,10 @@ target_include_directories(nfsim_core PUBLIC
     ${NFSIM_DIR}/NFutil
     ${NFSIM_DIR}/NFutil/MTrand
     ${NFSIM_DIR}/nauty24
+    # Allow NFinput_fromModel.cpp to include ast/Model.hpp and core/ headers
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ast
+    ${CMAKE_CURRENT_SOURCE_DIR}/core
 )
 target_compile_definitions(nfsim_core PUBLIC TIXML_USE_STL NFSIM_USE_EXPRTK)
 target_include_directories(nfsim_core PRIVATE ${exprtk_SOURCE_DIR})

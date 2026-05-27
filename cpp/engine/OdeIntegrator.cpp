@@ -853,8 +853,18 @@ void OdeIntegrator::derivs(double t, const double* y, double* dydt) const {
         resolver = [&](const std::string& name) -> double {
             if (name == "time") return t;
 
-            // TFUN resolution: __tfun_NAME__ → interpolate at current time
+            // TFUN resolution: __tfun_NAME__ → interpolate at current time (or custom index value)
             if (name.rfind("__tfun_", 0) == 0 && name.size() > 9 && name.substr(name.size() - 2) == "__") {
+                auto atPos = name.find("_AT_");
+                if (atPos != std::string::npos) {
+                    std::string tfunName = name.substr(7, atPos - 7);
+                    try {
+                        double val = std::stod(name.substr(atPos + 4, name.size() - atPos - 6));
+                        if (tfunRegistry_.has(tfunName)) {
+                            return tfunRegistry_.evaluate(tfunName, val);
+                        }
+                    } catch (...) {}
+                }
                 std::string tfunName = name.substr(7, name.size() - 9);
                 if (tfunRegistry_.has(tfunName)) {
                     return tfunRegistry_.evaluate(tfunName, t);

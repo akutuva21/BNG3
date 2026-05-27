@@ -589,7 +589,7 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
         }
     };
 
-    const auto writeCurrentNetwork = [&]() {
+    const auto writeCurrentNetwork = [&](const io::NetWriterOptions& options = {}) {
         const auto outputPath = sourcePath.parent_path() / (sourcePath.stem().string() + ".net");
         if (loadedNetData.has_value()) {
             // Write loaded .net data with updated species concentrations
@@ -600,9 +600,13 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
             out << "begin parameters\n";
             std::size_t pidx = 1;
             for (const auto& param : model.getParameters().all()) {
-                std::ostringstream valStr;
-                valStr << std::setprecision(15) << param.getValue();
-                out << "    " << pidx++ << " " << param.getName() << " " << valStr.str() << '\n';
+                if (!options.evaluateExpressions) {
+                    out << "    " << pidx++ << " " << param.getName() << " " << param.getExpression().toString() << '\n';
+                } else {
+                    std::ostringstream valStr;
+                    valStr << std::setprecision(15) << param.getValue();
+                    out << "    " << pidx++ << " " << param.getName() << " " << valStr.str() << '\n';
+                }
             }
             out << "end parameters\n";
             // Functions (passthrough from loaded .net)
@@ -642,7 +646,7 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
             }
             return outputPath;
         }
-        io::NetWriter::write(outputPath, model, *network);
+        io::NetWriter::write(outputPath, model, *network, options);
         return outputPath;
     };
 
@@ -966,7 +970,13 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
             }
 
             network = generator.generate(sourcePath);
-            writeCurrentNetwork();  // Triggers NetWriter::buildDerivedRateParams
+            const auto evalExprText = readArgument(action, "evaluate_expressions", "1");
+            bool evalExpr = true;
+            {
+                std::string ee = lowercase(trim(stripQuotes(evalExprText)));
+                evalExpr = (ee == "1" || ee == "true" || ee == "yes" || ee == "on");
+            }
+            writeCurrentNetwork(io::NetWriterOptions{.evaluateExpressions = evalExpr});  // Triggers NetWriter::buildDerivedRateParams
             continue;
         }
 
@@ -1320,15 +1330,28 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
                 std::cerr << "[bng_cpp] Running NFSim in-process: " << xmlPath << "\n";
             }
 
-            // Initialize NFsim System from the XML file
-            NFcore::System *nfSystem = NFinput::initializeFromXML(
-                xmlPath.string(),
+            // Try in-process direct initialization from AST model first
+            NFcore::System *nfSystem = NFinput::initializeFromModel(
+                &model,
                 useComplex,
                 globalMoleculeLimit,
                 nfVerbose,
-                suggestedTraversalLimit,
-                evalCSLF,
-                connectivityFlag);
+                suggestedTraversalLimit);
+
+            if (!nfSystem) {
+                if (verbose) {
+                    std::cerr << "[bng_cpp] Direct initialization returned nullptr; using XML fallback...\n";
+                }
+                // Initialize NFsim System from the XML file
+                nfSystem = NFinput::initializeFromXML(
+                    xmlPath.string(),
+                    useComplex,
+                    globalMoleculeLimit,
+                    nfVerbose,
+                    suggestedTraversalLimit,
+                    evalCSLF,
+                    connectivityFlag);
+            }
 
             if (!nfSystem) {
                 throw std::runtime_error("NFSim: Failed to initialize system from XML: " + xmlPath.string());
@@ -2210,7 +2233,11 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
                 if (protoName == "simulate" || protoName == "simulate_ode" || protoName == "simulate_ssa" ||
                     protoName == "simulate_pla" || protoName == "simulate_nf") {
                     ensureNetwork();
-                    runSimulation(model, protoAction, sourcePath, *network, verbose, lastSimulationState, lastSimulationEndTime);
+                    ast::Action actualAction = protoAction;
+                    if (!lastSimulationState.empty()) {
+                        actualAction.arguments["continue"] = "1";
+                    }
+                    runSimulation(model, actualAction, sourcePath, *network, verbose, lastSimulationState, lastSimulationEndTime);
                 } else if (protoName == "setparameter") {
                     auto target = stripQuotes(readArgument(protoAction, "target", ""));
                     auto valueText = stripQuotes(readArgument(protoAction, "value", ""));
@@ -2229,14 +2256,79 @@ void ActionDispatch::execute(ast::Model& model, const std::filesystem::path& sou
                         }
                     }
                 } else if (protoName == "setconcentration") {
-                    auto target = stripQuotes(readArgument(protoAction, "target", ""));
-                    auto valueText = stripQuotes(readArgument(protoAction, "value", ""));
-                    if (!target.empty() && !valueText.empty() && network.has_value()) {
+                    ensureNetwork();
+                    auto target = readArgument(protoAction, "target", "");
+                    auto valueText = readArgument(protoAction, "value", "");
+                    if (!target.empty() && !valueText.empty()) {
                         double val = parseScalarValue(valueText, model);
+                        const auto found = findSpeciesIndex(*network, target);
+                        if (found.has_value()) {
+                            network->species.get(*found).setAmount(val);
+                        }
+                    }
+                } else if (protoName == "addconcentration" || protoName == "add_concentration") {
+                    ensureNetwork();
+                    auto target = readArgument(protoAction, "target", "");
+                    auto valueText = readArgument(protoAction, "value", "");
+                    if (!target.empty() && !valueText.empty()) {
+                        double val = parseScalarValue(valueText, model);
+                        const auto found = findSpeciesIndex(*network, target);
+                        if (found.has_value()) {
+                            double current = network->species.get(*found).getAmount();
+                            network->species.get(*found).setAmount(current + val);
+                        }
+                    }
+                } else if (protoName == "saveparameters" || protoName == "save_parameters") {
+                    const auto label = stripQuotes(readArgument(protoAction, "value", "default"));
+                    std::unordered_map<std::string, double> snapshot;
+                    for (const auto& param : model.getParameters().all()) {
+                        snapshot[param.getName()] = param.getValue();
+                    }
+                    savedParameters[label] = snapshot;
+                } else if (protoName == "resetparameters" || protoName == "reset_parameters") {
+                    const auto label = stripQuotes(readArgument(protoAction, "value", "default"));
+                    const auto found = savedParameters.find(label);
+                    if (found != savedParameters.end()) {
+                        for (const auto& [name, val] : found->second) {
+                            model.getParameters().add(ast::Parameter(name, ast::Expression::number(val)));
+                        }
+                        model.getParameters().evaluateAll();
+                        if (network.has_value()) {
+                            std::vector<double> savedAmounts;
+                            if (!lastSimulationState.empty()) {
+                                savedAmounts = lastSimulationState;
+                            }
+                            network = generator.generate(sourcePath);
+                            if (!savedAmounts.empty()) {
+                                for (std::size_t i = 0; i < network->species.size() && i < savedAmounts.size(); ++i) {
+                                    network->species.get(i).setAmount(savedAmounts[i]);
+                                }
+                            }
+                        }
+                    }
+                } else if (protoName == "saveconcentrations" || protoName == "save_concentrations") {
+                    ensureNetwork();
+                    const auto label = stripQuotes(readArgument(protoAction, "value", "default"));
+                    savedConcentrations[label] = snapshotConcentrations(*network);
+                } else if (protoName == "resetconcentrations" || protoName == "reset_concentrations") {
+                    ensureNetwork();
+                    const auto label = stripQuotes(readArgument(protoAction, "value", "default"));
+                    const auto found = savedConcentrations.find(label);
+                    if (found != savedConcentrations.end()) {
+                        restoreConcentrations(*network, found->second);
+                    } else {
+                        const auto& seeds = model.getSeedSpecies();
                         for (std::size_t i = 0; i < network->species.size(); ++i) {
-                            if (network->species.get(i).getSpeciesGraph().toString() == target) {
-                                network->species.get(i).setAmount(val);
-                                break;
+                            if (i < seeds.size()) {
+                                try {
+                                    const double amount = seeds[i].getAmount().evaluate(
+                                        [&](const std::string& name) { return model.getParameters().evaluate(name); });
+                                    network->species.get(i).setAmount(amount);
+                                } catch (...) {
+                                    network->species.get(i).setAmount(0.0);
+                                }
+                            } else {
+                                network->species.get(i).setAmount(0.0);
                             }
                         }
                     }

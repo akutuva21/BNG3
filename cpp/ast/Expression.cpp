@@ -266,8 +266,13 @@ double Expression::evaluate(const std::function<double(const std::string&)>& res
             double indexVal = evalArg(0);
             // Try to resolve via special key that the ODE integrator sets up
             if (children_[1].kind() == ExpressionKind::Identifier) {
-                std::string tfunKey = "__tfun_" + children_[1].name() + "__";
+                std::ostringstream valStr;
+                valStr << std::scientific << indexVal;
+                std::string tfunKey = "__tfun_" + children_[1].name() + "_AT_" + valStr.str() + "__";
                 try { return resolveIdentifier(tfunKey); } catch (...) {}
+                
+                std::string fallbackKey = "__tfun_" + children_[1].name() + "__";
+                try { return resolveIdentifier(fallbackKey); } catch (...) {}
             }
             return indexVal;
         }

@@ -62,21 +62,34 @@ void bind_nfsim(py::module_& m) {
             out << xml_content;
         }
 
-        // Step 3: Initialize NFSim system from XML with RAII
+        // Step 3: Try direct AST initialization, fall back to XML if needed
         int suggestedTraversalLimit = -1;
         std::unique_ptr<NFcore::System> system;
 
         {
             py::gil_scoped_release release;
-            system.reset(NFinput::initializeFromXML(
-                tmp_guard.path,
+            system.reset(NFinput::initializeFromModel(
+                &model,
                 false,    // blockSameComplexBinding
                 -1,       // globalMoleculeLimit (unlimited)
                 verbose,
-                suggestedTraversalLimit,
-                false,    // evaluateComplexScopedLocalFunctions
-                false     // connectivityFlag
+                suggestedTraversalLimit
             ));
+
+            if (!system) {
+                if (verbose) {
+                    std::cerr << "[bind_nfsim] Direct initialization returned nullptr; using XML fallback...\n";
+                }
+                system.reset(NFinput::initializeFromXML(
+                    tmp_guard.path,
+                    false,    // blockSameComplexBinding
+                    -1,       // globalMoleculeLimit (unlimited)
+                    verbose,
+                    suggestedTraversalLimit,
+                    false,    // evaluateComplexScopedLocalFunctions
+                    false     // connectivityFlag
+                ));
+            }
         }
 
         if (!system) {

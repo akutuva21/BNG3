@@ -68,6 +68,13 @@ namespace NFinput {
 			bool evaluateComplexScopedLocalFunctions=false,
 			bool connectivityFlag=false);
 
+    System * initializeFromModel(
+            void* model_ptr,
+            bool blockSameComplexBinding,
+            int globalMoleculeLimit,
+            bool verbose,
+            int &suggestedTraversalLimit);
+
 	//! Reads the parameter XML block and puts them in the parameter map.
 	/*!
     	@author Michael Sneddon
